@@ -1,0 +1,177 @@
+//+------------------------------------------------------------------+
+//|                            AutomateTrading_BollingerBreakout.mq4 |
+//|                                                  Christos Tsilis |
+//|                                                                  |
+//+------------------------------------------------------------------+
+#property strict
+//+------------------------------------------------------------------+
+//| Expert initialization function                                   |
+//+------------------------------------------------------------------+
+#property description   "Automated Trading with breakout of Bollinger Bands"
+
+extern double LotSize=0.1;
+extern double StopLoss=25;
+extern double TakeProfit=40;
+extern int Slippage=2;
+extern bool TradeEnabled=true; 
+
+double ePoint;
+bool OrderAvail;
+bool LongOrderAv;
+bool ShortOrderAv;
+int OrderRetry=10;
+int Sleep=3;
+int MinBars=60;
+double MinSL;
+double MaxSL;
+double TP;
+double SL;
+double Spread;
+int Slip; 
+
+//Initialization
+void Initialize(){          
+   RefreshRates();
+   ePoint=Point;
+   Slip=Slippage;
+   if (MathMod(Digits,2)==1){
+      ePoint*=10;
+      Slip*=10;
+   }
+   TP=TakeProfit*ePoint;
+   SL=StopLoss*ePoint;
+   OrderAvail=TradeEnabled;
+   LongOrderAv=true;
+   ShortOrderAv=true;
+}
+
+//Check for orders
+void CheckOrderAvail(){            
+   if( Bars<MinBars ){
+      Print("Chart Incomplete");
+      OrderAvail=false;
+   }
+   OrdersOpen();
+   return;
+}
+
+//Check for type of orders and errors
+void OrdersOpen(){
+   for( int i = 0 ; i < OrdersTotal() ; i++ ) {
+      if( OrderSelect( i, SELECT_BY_POS, MODE_TRADES ) == false ) {
+         Print("Can't work with this order / ",GetLastError());
+         break;
+      } 
+      if( OrderSymbol()==Symbol() && OrderType() == OP_BUY) LongOrderAv=false;
+      if( OrderSymbol()==Symbol() && OrderType() == OP_SELL) ShortOrderAv=false;
+   }
+   return;
+}
+
+//Close orders of a specific type and current symbol
+void CloseAll(int Command){
+   double ClosePrice=0;
+   for( int i = 0 ; i < OrdersTotal() ; i++ ) {
+      if( OrderSelect( i, SELECT_BY_POS, MODE_TRADES ) == false ) {
+         Print("Can't work with this order / ",GetLastError());
+         break;
+      }
+      if( OrderSymbol()==Symbol() && OrderType()==Command) {
+         if(Command==OP_BUY) ClosePrice=Bid;
+         if(Command==OP_SELL) ClosePrice=Ask;
+         double Lots=OrderLots();
+         int Ticket=OrderTicket();
+         for(int j=1; j<OrderRetry; j++){
+            bool res=OrderClose(Ticket,Lots,ClosePrice,Slip,Red);
+            if(res){
+               Print("Submitted Closing Order",Ticket," closed at price ",ClosePrice);
+               break;
+            }
+            else Print("error closing order: ",Ticket," return error: ",GetLastError());
+         }
+      }
+   }
+   return;
+}
+
+//New Order
+void OpenNew(int Command){
+   RefreshRates();
+   double OpenPrice=0;
+   double SLPrice = 0;
+   double TPPrice = 0;
+   if(Command==OP_BUY){
+      OpenPrice=Ask;
+      SLPrice=OpenPrice-SL;
+      TPPrice=OpenPrice+TP;
+   }
+   if(Command==OP_SELL){
+      OpenPrice=Bid;
+      SLPrice=OpenPrice+SL;
+      TPPrice=OpenPrice-TP;
+   }
+   for(int i=1; i<OrderRetry; i++){
+      int res=OrderSend(Symbol(),Command,LotSize,OpenPrice,Slip,NormalizeDouble(SLPrice,Digits),NormalizeDouble(TPPrice,Digits),"",0,0,Green);
+      if(res){
+         Print("TRADE - NEW - Order ",res," submitted: Command ",Command," Volume ",LotSize," Open ",OpenPrice," Slippage ",Slip," Stop ",SLPrice," Take ",TPPrice);
+         break;
+      }
+      else Print("error submitting order: ",GetLastError());
+   }
+   return;
+}
+
+//Bollinger Bands
+extern int BandsPeriod = 200;          
+extern double BandsDeviation = 2; 
+bool BandsBreakUp=false;
+bool BandsBreakDown=false;
+
+void FindBandsTrend(){
+   BandsBreakUp=false;
+   BandsBreakDown=false;
+   double BandsTopCurr=iBands(Symbol(),0,BandsPeriod,BandsDeviation,0,PRICE_CLOSE,MODE_UPPER,0);
+   double BandsLowCurr=iBands(Symbol(),0,BandsPeriod,BandsDeviation,0,PRICE_CLOSE,MODE_LOWER,0);
+   double BandsTopPrev=iBands(Symbol(),0,BandsPeriod,BandsDeviation,0,PRICE_CLOSE,MODE_UPPER,1);
+   double BandsLowPrev=iBands(Symbol(),0,BandsPeriod,BandsDeviation,0,PRICE_CLOSE,MODE_LOWER,1);
+   if(Close[1]<BandsTopPrev && Close[0]>BandsTopCurr) BandsBreakUp=true;
+   if(Close[1]>BandsLowPrev && Close[0]<BandsLowCurr) BandsBreakDown=true;
+}
+
+//+------------------------------------------------------------------+
+//| Initialization                                                               |
+//+------------------------------------------------------------------+
+int OnInit()
+  {
+//---
+   
+//---
+   return(INIT_SUCCEEDED);
+  }
+//+------------------------------------------------------------------+
+//| Deinitialization                                                          |
+//+------------------------------------------------------------------+
+void OnDeinit(const int reason)
+  {
+//---
+   
+  }
+//+------------------------------------------------------------------+
+//| Every tick                                                                  |
+//+------------------------------------------------------------------+
+void OnTick()
+  {
+//---
+   //Calling initialization, checks and technical analysis
+   Initialize();
+   CheckOrderAvail();
+   FindBandsTrend();
+   //Check of Entry/Exit signal with operations to perform
+   if(BandsBreakUp){
+      if(LongOrderAv && ShortOrderAv && OrderAvail) OpenNew(OP_BUY);
+   }
+   if(BandsBreakDown){
+      if(ShortOrderAv && LongOrderAv && OrderAvail) OpenNew(OP_SELL);
+   }
+  }
+//+------------------------------------------------------------------+
